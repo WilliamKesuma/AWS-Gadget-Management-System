@@ -1,0 +1,90 @@
+"""
+Delete all DynamoDB records where PK does NOT start with 'USER#'.
+
+This is a destructive operation. Use --dry-run first to preview what will be deleted.
+
+Usage:
+    python scripts/delete-non-user-records.py --table gms-dev-assets --region ap-southeast-1 --dry-run
+    python scripts/delete-non-user-records.py --table gms-dev-assets --region ap-southeast-1
+"""
+
+import argparse
+
+import boto3
+
+
+def delete_non_user_records(table_name: str, region: str, dry_run: bool) -> None:
+    ddb_client = boto3.client("dynamodb", region_name=region)
+
+    print(
+        f"Scanning table '{table_name}' for records where PK does NOT start with 'USER#'..."
+    )
+
+    paginator = ddb_client.get_paginator("scan")
+    pages = paginator.paginate(
+        TableName=table_name,
+        ProjectionExpression="PK, SK",
+        FilterExpression="NOT begins_with(PK, :prefix)",
+        ExpressionAttributeValues={":prefix": {"S": "USER#"}},
+    )
+
+    keys_to_delete = []
+    for page in pages:
+        for item in page.get("Items", []):
+            keys_to_delete.append(
+                {
+                    "PK": item["PK"],
+                    "SK": item["SK"],
+                }
+            )
+
+    print(f"Found {len(keys_to_delete)} records to delete.")
+
+    if not keys_to_delete:
+        print("Nothing to delete.")
+        return
+
+    if dry_run:
+        print("[DRY RUN] The following records would be deleted:")
+        for key in keys_to_delete:
+            print(f"  PK={key['PK']['S']}  SK={key['SK']['S']}")
+        print(f"\n[DRY RUN] Total: {len(keys_to_delete)} records")
+        return
+
+    # Batch delete in chunks of 25 (DynamoDB limit)
+    deleted = 0
+    chunk_size = 25
+    for i in range(0, len(keys_to_delete), chunk_size):
+        chunk = keys_to_delete[i : i + chunk_size]
+        request_items = {table_name: [{"DeleteRequest": {"Key": key}} for key in chunk]}
+
+        response = ddb_client.batch_write_item(RequestItems=request_items)
+
+        # Handle unprocessed items with simple retry
+        unprocessed = response.get("UnprocessedItems", {})
+        while unprocessed:
+            print(
+                f"  Retrying {len(unprocessed.get(table_name, []))} unprocessed items..."
+            )
+            response = ddb_client.batch_write_item(RequestItems=unprocessed)
+            unprocessed = response.get("UnprocessedItems", {})
+
+        deleted += len(chunk)
+        print(f"  Deleted {deleted}/{len(keys_to_delete)}...")
+
+    print(f"\nDone. Total deleted: {deleted}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Delete all DynamoDB records where PK does not start with USER#"
+    )
+    parser.add_argument("--table", required=True, help="DynamoDB table name")
+    parser.add_argument("--region", required=True, help="AWS region")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview deletions without writing",
+    )
+    args = parser.parse_args()
+    delete_non_user_records(args.table, args.region, args.dry_run)

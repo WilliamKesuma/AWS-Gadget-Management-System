@@ -1,0 +1,8 @@
+aws-lambda-powertools[all]
+boto3
+simplejson
+aws-xray-sdk
+pydantic
+python-dateutil
+weasyprint
+pypdf

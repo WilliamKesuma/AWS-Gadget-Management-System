@@ -1,0 +1,6 @@
+aws-lambda-powertools[all]
+boto3
+simplejson
+aws-xray-sdk
+pydantic
+PyJWT[crypto]
